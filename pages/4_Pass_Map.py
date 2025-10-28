@@ -133,34 +133,123 @@ canvas_result = st_canvas(
     stroke_width=2,
     stroke_color="blue",
     background_color="#cceeff",
-    background_image=bg_image_pitch,
     update_streamlit=True,
     height=500,
     width=600,
-    drawing_mode="point",  # for clicks
+    drawing_mode="line",  # for clicks
     key="pass_canvas",
 )
 
-# Plot players as points on canvas
-for player, (x, y) in player_positions.items():
-    st.write(f"{player}: ({int(x)},{int(y)})")  # can replace with markers if using matplotlib/plotly
-
-# Capture clicks
 if canvas_result.json_data is not None:
-    for obj in canvas_result.json_data["objects"]:
-        x, y = obj["left"], obj["top"]
-        st.session_state.temp_click.append((x, y))
-        if len(st.session_state.temp_click) == 2:
-            (x1, y1), (x2, y2) = st.session_state.temp_click
-            from_player = min(player_positions.keys(), key=lambda p: math.hypot(player_positions[p][0]-x1, player_positions[p][1]-y1))
-            to_player = min(player_positions.keys(), key=lambda p: math.hypot(player_positions[p][0]-x2, player_positions[p][1]-y2))
-            new_pass = pd.DataFrame([{
-                "From_X": x1, "From_Y": y1,
-                "To_X": x2, "To_Y": y2,
-                "From_Player": from_player,
-                "To_Player": to_player
-            }])
-            st.session_state.pass_map = pd.concat([st.session_state.pass_map, new_pass]).reset_index(drop=True)
-            st.session_state.temp_click = []
+    objects = canvas_result.json_data.get("objects", [])
+    if objects:
+        for obj in objects:
+            x1 = obj['left'] + obj['x1']
+            y1 = obj['top'] + obj['y1']
+            x2 = obj['left'] + obj['x2']
+            y2 = obj['top'] + obj['y2']
+            st.session_state.temp_click = pd.DataFrame(
+                [[x1, y1, x2, y2]],
+                columns=["From_X", "From_Y", "To_X", "To_Y"]
+            )
+            if not ((st.session_state.pass_map[['From_X','From_Y','To_X','To_Y']]
+                == st.session_state.temp_click.iloc[0]).all(axis=1).any()):
+                st.session_state.pass_map = pd.concat(
+                    [st.session_state.pass_map, st.session_state.temp_click],
+                    ignore_index=True
+                )
+
 
 st.dataframe(st.session_state.pass_map)
+
+if "team_lineup" not in st.session_state:
+    st.session_state.team_lineup = pd.DataFrame(columns=["Match", "Position 1", "Position 2", "Position 3", "Position 4", "Position 5", "Position 6", "Centre", "Goalkeeper"])
+
+
+st.write ("### Player Positions")
+
+st.write("Input player positions for home team")
+
+with st.form("Add Home Substitution"):
+    position1 = st.selectbox("Position 1", [f"Player {i}" for i in range(1, 14)])
+    position2 = st.selectbox("Position 2", [f"Player {i}" for i in range(1, 14)])
+    position3 = st.selectbox("Position 3", [f"Player {i}" for i in range(1, 14)])
+    position4 = st.selectbox("Position 4", [f"Player {i}" for i in range(1, 14)])
+    position5 = st.selectbox("Position 5", [f"Player {i}" for i in range(1, 14)])
+    position6 = st.selectbox("Position 6", [f"Player {i}" for i in range(1, 14)])
+    position7 = st.selectbox("Centre", [f"Player {i}" for i in range(1, 14)])
+    Goalkeeper = st.selectbox("Goalkeeper", [f"Player {i}" for i in range(1, 14)])
+    submitted = st.form_submit_button("Add Event")
+
+st.write ("Input player positions for away team")
+
+with st.form("Add Away Substitution"):
+    match_input = st.text_input("Match (e.g., Team A vs Team B)")
+    position1 = st.selectbox("Position 1", [f"Player {i}" for i in range(1, 14)])
+    position2 = st.selectbox("Position 2", [f"Player {i}" for i in range(1, 14)])
+    position3 = st.selectbox("Position 3", [f"Player {i}" for i in range(1, 14)])
+    position4 = st.selectbox("Position 4", [f"Player {i}" for i in range(1, 14)])
+    position5 = st.selectbox("Position 5", [f"Player {i}" for i in range(1, 14)])
+    position6 = st.selectbox("Position 6", [f"Player {i}" for i in range(1, 14)])
+    position7 = st.selectbox("Centre", [f"Player {i}" for i in range(1, 14)])
+    Goalkeeper = st.selectbox("Goalkeeper", [f"Player {i}" for i in range(1, 14)])
+    submitted = st.form_submit_button("Add Event")
+
+if submitted:
+    new_row = pd.DataFrame([{
+        "Match": match_input,
+        "Position 1": position1,
+        "Position 2": position2,
+        "Position 3": position3,
+        "Position 4": position4,
+        "Position 5": position5,
+        "Position 6": position6,
+        "Centre": position7,
+        "Goalkeeper": Goalkeeper,
+    }])
+    st.session_state.team_lineup = pd.concat(
+        [st.session_state.team_lineup, new_row]
+    ).drop_duplicates().reset_index(drop=True)
+
+st.dataframe(st.session_state.team_lineup)
+
+st.write("### Substitutions")
+
+if "substitutions" not in st.session_state:
+    st.session_state.substitutions = pd.DataFrame(columns=["Time", "Match", "Team", "Player substituted", "Player coming on"])
+
+with st.form("Add Subsitution"):
+    time_input = st.text_input("Time (e.g., 12:34)")
+    match_input = st.text_input("Match (e.g., Team A vs Team B)")
+    team_input = st.selectbox("Team", ["Team A", "Team B"])
+    player_input = st.selectbox("Player substituted", [f"Player {i}" for i in range(1, 14)])
+    player_input2 = st.selectbox("Player coming on", [f"Player {i}" for i in range(1, 14)] + ["N/A"])
+    submitted = st.form_submit_button("Add Event")
+
+    
+  
+    
+if submitted:
+        new_row = pd.DataFrame([{
+            "Time": time_input,
+            "Match": match_input,
+            "Team": team_input,
+            "Player substituted": player_input,
+            "Player coming on": player_input2,
+        }])
+        st.session_state.substitutions = pd.concat(
+            [st.session_state.substitutions, new_row]
+        ).drop_duplicates().reset_index(drop=True)
+
+if len(st.session_state.substitutions) == 0:
+    st.info("No events yet.")
+else:
+    st.dataframe(st.session_state.substitutions.sort_values("Time", ascending=True), use_container_width=True)
+
+csv = st.session_state.substitutions.to_csv(index=False).encode('utf-8')
+st.download_button(
+    label="📥 Export Events as CSV",
+    data=csv,
+    file_name="water_polo_events.csv",
+    mime="text/csv"
+)
