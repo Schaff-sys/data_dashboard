@@ -3,6 +3,123 @@ import pandas as pd
 from streamlit_drawable_canvas import st_canvas
 import math
 from PIL import Image
+from pathlib import Path
+import os
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+
+# Load environment variables
+env_path = Path(__file__).resolve().parent.parent / ".env"
+print("Loading environment variables from:", env_path)
+load_dotenv(dotenv_path=env_path, override=True)
+
+db_user = os.getenv("db_user")
+db_password = os.getenv("db_password")
+db_host = os.getenv("db_host")
+db_port = os.getenv("db_port")
+db_name = os.getenv("db_name")
+
+if not all([db_user, db_password, db_host, db_port, db_name]):
+    raise ValueError("Variables de entorno incompletas.")
+
+engine = create_engine(f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}")
+
+
+@st.cache_data
+def get_competitions():
+    query = """
+        SELECT DISTINCT "match_competitionId", "match_competitionDisplayName"
+        FROM public.mergeddatabasesall
+        ORDER BY "match_competitionId"
+    """
+    return pd.read_sql(query, con=engine)
+
+df = get_competitions()
+
+competition_options = list(df["match_competitionId"]) + ["Add new..."]
+
+selected_competition = st.selectbox(
+    "Select competition",
+    competition_options,
+    format_func=lambda x: f"{x} – {df.loc[df.match_competitionId==x, 'match_competitionDisplayName'].iloc[0]}"
+                 if x != "Add new..." else x
+)
+
+# If user wants to add a new competition
+if selected_competition == "Add new...":
+    new_id = st.text_input("Enter new competition ID")
+    new_name = st.text_input("Enter new competition name")
+    if st.button("Add competition"):
+        if new_id and new_name:
+            # Insert into database
+            with engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        INSERT INTO public.mergeddatabasesall ("match_competitionId", "match_competitionDisplayName")
+                        VALUES (:id, :name)
+                        ON CONFLICT DO NOTHING
+                    """),
+                    {"id": new_id, "name": new_name}
+                )
+            st.success(f"Competition {new_name} added!")
+            st.cache_data.clear()
+            st.experimental_rerun()  # refresh the page to show new competition
+        else:
+            st.error("Please enter both ID and name")
+
+@st.cache_data
+
+def get_matches(comp_id):
+        query = """
+            SELECT DISTINCT "matchId", "team_name" FROM public.mergeddatabasesall
+            WHERE "match_competitionId" = %s
+            ORDER BY "matchId"
+        """
+        return pd.read_sql(query, con=engine, params=(comp_id, ))
+
+if selected_competition != "Add new...":
+
+    df = get_matches(selected_competition)
+
+    df_clean = df.dropna()
+
+    matches_options = list(df_clean["matchId"].unique()) + ["Add new..."]
+
+    def match_label(x):
+        if x != "Add new...":
+            teams = df_clean.loc[df_clean.matchId==x, 'team_name'].dropna().unique()
+            team_name_str = " vs ".join(teams)
+            return f"{x} – {team_name_str}"
+
+    selected_matches = st.selectbox(
+        "Select match",
+        matches_options,
+        format_func=match_label
+    )
+
+# If user wants to add a new match
+    if selected_matches == "Add new...":
+        new_id = st.text_input("Enter new match ID")
+        new_name = st.text_input("Enter new match name")
+        if st.button("Add match"):
+            if new_id and new_name:
+                # Insert into database
+                with engine.begin() as conn:
+                    conn.execute(
+                        text("""
+                            INSERT INTO public.mergeddatabasesall ("match_competitionId", "match_competitionDisplayName")
+                            VALUES (:id, :name)
+                            ON CONFLICT DO NOTHING
+                        """),
+                        {"id": new_id, "name": new_name}
+                    )
+                st.success(f"Competition {new_name} added!")
+                st.cache_data.clear()
+                st.experimental_rerun()  # refresh the page to show new competition
+        else:
+         st.error("Please enter both ID and name")
+
+
 
 st.title("🕒 Data Entry")
 
@@ -12,17 +129,16 @@ with st.form("Add Match Id"):
     submitted = st.form_submit_button("Add Match and Period")
         
 
-
 with st.expander("Events"):
 
     event_input = st.selectbox("Event", ["6v6", "6v5", "Penalty", "Counter"])
     result_input = st.selectbox("Outcome", ["Goal", "Miss", "Save", "Block", "Turnover", "Exclusion"])
 
     if "events" not in st.session_state:
-        st.session_state.events = pd.DataFrame(columns=["Time", "Team", "Event", "Subevent", "Outcome", "Type"])
+        st.session_state.events = pd.DataFrame(columns=["time", "team", "event", "subevent", "outcome", "type"])
 
     def shot_field():
-        return st.selectbox("Shot Type", ["Skip Shot", "Lob Shot", "None"])
+        return st.selectbox("Shot Type", ["Skip Shot", "Lob Shot", "Normal Shot", "None"])
     
     def turnover_field():
         return st.selectbox("Turnover Type", ["Steal", "Bad Pass", "Offensive Foul", "Shot Clock Violation"])
@@ -82,28 +198,6 @@ with st.expander("Events"):
             player_input2 = st.selectbox("Player affected (if applicable)", [f"W{i}" for i in range(1, 15)] + [f"B{i}" for i in range(1, 15)] + ["N/A"])
             submitted = st.form_submit_button("Add Event")
         
-        
-    if submitted:
-            new_row = pd.DataFrame([{
-                "Type": event_input,
-                "Time": time_input,
-                "Match": match_input,
-                "Period": period_input,
-                "Team": team_input,
-                "Event": event_input,
-                "Player committing": player_input,
-                "Player affected": player_input2,
-                "Outcome": result_input,
-                "Turnover Type": turnover_input if (event_input != "Penalty" and result_input == 'Turnover') else "N/A",
-                "Shot Type": shot_input if result_input in ["Goal", "Miss", "Save"] else 'N/A',
-                "Subevent": subevent6v6_input if event_input == "6v6"
-                else subevent6v5_input if event_input == "6v5"
-                else subeventcounter_input if event_input == "Counter"
-                else "N/A",
-            }])
-            st.session_state.events = pd.concat(
-                [st.session_state.events, new_row]
-            ).drop_duplicates().reset_index(drop=True)
 
     csv = st.session_state.events.to_csv(index=False).encode('utf-8')
 
@@ -119,19 +213,23 @@ with st.expander("Shots"):
 
     st.title("🥅 Goal Shot Map")
 
+
+    
     # Initialize session state
     if "shots" not in st.session_state:
-        st.session_state.shots = pd.DataFrame(columns=["x_shot", "y_shot", "x_location", "y_location", "Outcome", "Type"])
+        st.session_state.shots = pd.DataFrame(columns=["x_shot", "y_shot", "x_location", "y_location", "outcome", "type", "team"])
 
     # Inputs
     col1, col2 = st.columns(2)
     with col1:
         shot_outcome = st.selectbox("Outcome", ["Goal", "Save", "Miss", "Block"])
+        team = st.selectbox("Team", ["Home", "Away"])
+    
 
     if shot_outcome == "Goal" or shot_outcome == "Save" or shot_outcome == "Miss":
         st.markdown("### Click where the ball went on the goal")
 
-        bg_image = Image.open("goal2.jpg")
+        bg_image = Image.open("goal.jpg")
 
         canvas_result1 = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)",  # Click marker color
@@ -143,12 +241,12 @@ with st.expander("Shots"):
             height=300,
             width=800,
             drawing_mode="point",  # Clicks only
-            key="goal_canvas",
+            key="goal_canvas_{match_input}_{period_input}",
         )
 
         st.markdown("### Click where the ball went on the pitch")
 
-        bg_image_pitch = Image.open("Pool-Location-Screen-1500x1744.png.webp")
+        bg_image_pitch = Image.open("pitch.jpg")
 
         canvas_result2 = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)",  # Click marker color
@@ -160,7 +258,7 @@ with st.expander("Shots"):
             width=800,
             update_streamlit=True,
             drawing_mode="point",  # Clicks only
-            key="pitch_canvas",
+            key="pitch_canvas_{match_input}_{period_input}",
         )
 
         # Add shots when user clicks
@@ -169,7 +267,7 @@ with st.expander("Shots"):
                 x_shot, y_shot = obj["left"], obj["top"]
                 # Only add new clicks (avoid duplicates)
                 if not any((st.session_state.shots["x_shot"] == x_shot) & (st.session_state.shots["y_shot"] == y_shot)):
-                    new_shot = pd.DataFrame([{"x_shot": x_shot, "y_shot": y_shot, "Outcome": shot_outcome, "Type": "shot_input"}])
+                    new_shot = pd.DataFrame([{"x_shot": x_shot, "y_shot": y_shot, "outcome": shot_outcome, "type": "shot_input", "team": team}])
                     st.session_state.shots = pd.concat([st.session_state.shots, new_shot], ignore_index=True)
 
         if canvas_result2.json_data is not None:
@@ -186,7 +284,7 @@ with st.expander("Shots"):
 
         st.markdown("### Click where the ball went on the pitch")
 
-        bg_image_pitch = Image.open("Pool-Location-Screen-1500x1744.png.webp")
+        bg_image_pitch = Image.open("pitch.jpg")
 
         canvas_result2 = st_canvas(
             fill_color="rgba(255, 0, 0, 0.3)",  # Click marker color
@@ -198,7 +296,7 @@ with st.expander("Shots"):
             width=800,
             update_streamlit=True,
             drawing_mode="point",  # Clicks only
-            key="pitch_canvas",
+            key="pitch_canvas_block_{match_input}_{period_input}",
         )
 
 
@@ -208,7 +306,7 @@ with st.expander("Shots"):
                 x_location, y_location = obj["left"], obj["top"]
                 # Match with existing shots without location
                 if not any((st.session_state.shots["x_location"] == x_location) & (st.session_state.shots["y_location"] == y_location)):
-                    new_shot = pd.DataFrame([{"x_location": x_location, "y_location": y_location, "Outcome": shot_outcome, "Type": "shot_input"}])
+                    new_shot = pd.DataFrame([{"x_location": x_location, "y_location": y_location, "outcome": shot_outcome, "type": "shot_input", "team": team}])
                     st.session_state.shots = pd.concat([st.session_state.shots, new_shot], ignore_index=True)
 
     csv = st.session_state.shots.to_csv(index=False).encode('utf-8')
@@ -223,11 +321,9 @@ with st.expander("Shots"):
 with st.expander("Passes"):
     st.title("🏐 Pass Map")
 
-    
-
     # Initialize session state
     if "pass_map" not in st.session_state:
-        st.session_state.pass_map = pd.DataFrame(columns=["From_X","From_Y","To_X","To_Y","From_Player","To_Player", "play_number", "Type", "Type of Play"])
+        st.session_state.pass_map = pd.DataFrame(columns=["from_x","from_y","to_x","to_y","from_player","to_player", "play_number", "type", "type_of_play"])
 
     if "current_play" not in st.session_state:
         st.session_state.current_play = 0
@@ -251,9 +347,7 @@ with st.expander("Passes"):
         st.write("Click start and end positions of passes")
 
     if type_of_play == "Power Play":
-        bg_image_pitch = Image.open("pitch.png")
-
-    
+        bg_image_pitch = Image.open("6v5.jpg")
 
         # Draw the pool/field
         canvas_result = st_canvas(
@@ -263,14 +357,51 @@ with st.expander("Passes"):
             background_color="#cceeff",
             background_image=bg_image_pitch,
             update_streamlit=True,
-            height=400,
+            height=600,
             width=1000,
             drawing_mode="line",  # for clicks
             key=f"pass_canvas_{st.session_state.current_play}",
         )
 
+        if canvas_result.json_data is not None:
+            objects = canvas_result.json_data.get("objects", [])
+            for obj in objects:
+                x1 = obj["left"] + obj["x1"]
+                y1 = obj["top"] + obj["y1"]
+                x2 = obj["left"] + obj["x2"]
+                y2 = obj["top"] + obj["y2"]
+
+                player_position_values_6v5 = {
+                    'player1': (150, 150),
+                    'player2': (350, 450),
+                    'player4': (600, 450),
+                    'player5': (850, 150),
+                    'post1': (600, 150),
+                    'post2': (350, 150),
+                }
+
+                def closest_player(x,y):
+                    return min(
+                        player_position_values_6v5,
+                        key = lambda player: (player_position_values_6v5[player][0] -x)**2 + (player_position_values_6v5[player][1]-y)**2
+                    )
+
+                From_Player = closest_player(x1,y1)
+        
+
+                To_Player = closest_player(x2,y2)
+
+                temp = pd.DataFrame(
+                    [[x1, y1, x2, y2, From_Player, To_Player, st.session_state.current_play, "pass_input", type_of_play]],
+                    columns=["from_x", "from_y", "to_x", "to_y", "from_player", "to_player", "play_number", "type", "type_of_play"]
+                )
+
+                # Avoid duplicate entries
+                if not ((st.session_state.pass_map[["from_x", "from_y", "to_x", "to_y"]] == temp.iloc[0][["from_x", "from_y", "to_x", "to_y"]]).all(axis=1).any()):
+                    st.session_state.pass_map = pd.concat([st.session_state.pass_map, temp], ignore_index=True)
+
     if type_of_play == "Regular":
-        bg_image_pitch = Image.open("pitch.png")
+        bg_image_pitch = Image.open("6v6.jpg")
 
         # Draw the pool/field
         canvas_result = st_canvas(
@@ -280,7 +411,7 @@ with st.expander("Passes"):
             background_color="#cceeff",
             background_image=bg_image_pitch,
             update_streamlit=True,
-            height=400,
+            height=600,
             width=1000,
             drawing_mode="line",  # for clicks
             key=f"pass_canvas_{st.session_state.current_play}",
@@ -294,13 +425,34 @@ with st.expander("Passes"):
             y1 = obj["top"] + obj["y1"]
             x2 = obj["left"] + obj["x2"]
             y2 = obj["top"] + obj["y2"]
+
+            player_position_values_6v6 = {
+                'player1': (150, 150),
+                'player2': (300, 400),
+                'player3': (500, 490),
+                'player4': (700, 400),
+                'player5': (850, 150),
+                'player6': (500, 150),
+            }
+
+            def closest_player(x,y):
+                return min(
+                    player_position_values_6v6,
+                    key = lambda player: (player_position_values_6v6[player][0] -x)**2 + (player_position_values_6v6[player][1]-y)**2
+                )
+
+            From_Player = closest_player(x1,y1)
+    
+
+            To_Player = closest_player(x2,y2)
+
             temp = pd.DataFrame(
-                [[x1, y1, x2, y2, None, None, st.session_state.current_play, "pass_input"]],
-                columns=["From_X", "From_Y", "To_X", "To_Y", "From_Player", "To_Player", "Play_Number", "Type", 'Type of Play']
+                [[x1, y1, x2, y2, From_Player, To_Player, st.session_state.current_play, "pass_input", type_of_play]],
+                columns=["from_x", "from_y", "to_x", "to_y", "from_player", "to_player", "play_number", "type", "type_of_play"]
             )
 
             # Avoid duplicate entries
-            if not ((st.session_state.pass_map[["From_X", "From_Y", "To_X", "To_Y"]] == temp.iloc[0][["From_X", "From_Y", "To_X", "To_Y"]]).all(axis=1).any()):
+            if not ((st.session_state.pass_map[["from_x", "from_y", "to_x", "to_y"]] == temp.iloc[0][["from_x", "from_y", "to_x", "to_y"]]).all(axis=1).any()):
                 st.session_state.pass_map = pd.concat([st.session_state.pass_map, temp], ignore_index=True)
 
 
@@ -314,15 +466,14 @@ with st.expander("Passes"):
     
 with st.expander("Positions"):
     if "team_lineup" not in st.session_state:
-        st.session_state.team_lineup = pd.DataFrame(columns=["Match", "Position 1", "Position 2", "Position 3", "Position 4", "Position 5", "Position 6", "Centre", "Goalkeeper", "Type"])
+        st.session_state.team_lineup = pd.DataFrame(columns=["match", "position_1", "position_2", "position_3", "position_4", "position_5", "position_6", "centre", "goalkeeper", "type"])
     
-    st.session_state.team_lineup["Type"] = "lineup_input"
 
     st.write ("### Player Positions")
 
     st.write("Input starting player positions")
 
-    with st.form("Add Home Substitution"):
+    with st.form("Add line-ups"):
         match_input = st.text_input("Match Id")
         team_input = st.selectbox("Team", ["Home", "Away"])
         position1 = st.selectbox("Position 1", [f"W{i}" for i in range(1, 15)])
@@ -335,21 +486,23 @@ with st.expander("Positions"):
         goalkeeper = st.selectbox("Goalkeeper", [f"W{i}" for i in range(1, 15)])
         submitted = st.form_submit_button("Add Line-up")
 
-    if submitted:
-        new_row = pd.DataFrame([{
-            "Match": match_input,
-            "Position 1": position1,
-            "Position 2": position2,
-            "Position 3": position3,
-            "Position 4": position4,
-            "Position 5": position5,
-            "Position 6": position6,
-            "Centre": position7,
-            "Goalkeeper": goalkeeper,
-        }])
-        st.session_state.team_lineup = pd.concat(
-            [st.session_state.team_lineup, new_row]
-        ).drop_duplicates().reset_index(drop=True)
+        if submitted:
+            new_row = pd.DataFrame([{
+                "match": match_input,
+                "position_1": position1,
+                "position_2": position2,
+                "position_3": position3,
+                "position_4": position4,
+                "position_5": position5,
+                "position_6": position6,
+                "centre": position7,
+                "goalkeeper": goalkeeper,
+                "team": team_input,
+                "type": "lineup_input",
+            }])
+            st.session_state.team_lineup = pd.concat(
+                [st.session_state.team_lineup, new_row]
+            ).drop_duplicates().reset_index(drop=True)
 
 
     csv = st.session_state.team_lineup.to_csv(index=False).encode('utf-8')
@@ -361,12 +514,11 @@ with st.expander("Positions"):
 
     st.write("### Substitutions")
 
-   
+
 
     if "substitutions" not in st.session_state:
-        st.session_state.substitutions = pd.DataFrame(columns=["Time", "Match", "Team", "Player substituted", "Player coming on", "Type"])
+        st.session_state.substitutions = pd.DataFrame(columns=["time", "match", "team", "player_substituted", "player_coming_on", "type"])
         
-    st.session_state.substitutions["Type"] = "substitution_input"
     
     with st.form("Add Subsitution"):
         time_input = st.text_input("Time (e.g., 12:34)")
@@ -380,11 +532,12 @@ with st.expander("Positions"):
         
     if submitted:
             new_row = pd.DataFrame([{
-                "Time": time_input,
-                "Match": match_input,
-                "Team": team_input,
-                "Player substituted": player_input,
-                "Player coming on": player_input2,
+                "time": time_input,
+                "match": match_input,
+                "team": team_input,
+                "player_substituted": player_input,
+                "player_coming_on": player_input2,
+                "type": "substitution_input"
             }])
             st.session_state.substitutions = pd.concat(
                 [st.session_state.substitutions, new_row]
